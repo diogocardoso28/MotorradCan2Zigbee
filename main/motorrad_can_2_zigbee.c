@@ -26,19 +26,10 @@
 #include "esp_timer.h"
 
 /* --------------------- Definitions and static variables ------------------ */
-// Example Configuration
-#define NO_OF_ITERS 3
 #define RX_TASK_PRIO 9
 
 #define MAIN_TAG "MotorradCan2Zigbee"
 #define CAN_TAG "CAN"
-
-#define ID_MASTER_STOP_CMD 0x0A0
-#define ID_MASTER_START_CMD 0x0A1
-#define ID_MASTER_PING 0x0A2
-#define ID_SLAVE_STOP_RESP 0x0B0
-#define ID_SLAVE_DATA 0x0B1
-#define ID_SLAVE_PING_RESP 0x0B2
 
 static const twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();
 static const twai_timing_config_t t_config = TWAI_TIMING_CONFIG_500KBITS();
@@ -48,7 +39,7 @@ static const twai_general_config_t g_config = {.mode = TWAI_MODE_NORMAL,
                                                .rx_io = GPIO_NUM_2,
                                                .clkout_io = TWAI_IO_UNUSED,
                                                .bus_off_io = TWAI_IO_UNUSED,
-                                               .tx_queue_len = 5,
+                                               .tx_queue_len = 0,
                                                .rx_queue_len = 5,
                                                .alerts_enabled = TWAI_ALERT_NONE,
                                                .clkout_divider = 0};
