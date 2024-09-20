@@ -29,7 +29,8 @@
  */
 #define MANUFACTURER_NAME "\x09" \
                           "CardosoTech"
-#define MODEL_IDENTIFIER "\x07" CONFIG_IDF_TARGET
+#define MODEL_IDENTIFIER "\x07" \
+                         "MCANZIG"
 
 #define ESP_ZB_ZED_CONFIG()                               \
     {                                                     \

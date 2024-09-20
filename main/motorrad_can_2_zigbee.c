@@ -38,8 +38,15 @@
 #define MAIN_TAG "MotorradCan2Zigbee"
 #define CAN_TAG "CAN"
 #define ZIGBEE_TAG "ZIGBEE"
+void process_message(twai_message_t rx_msg);
 
 /* --------------------- Zigbee Stuff --------------------- */
+int action = NONE;
+
+static int16_t zb_temperature_to_s16(float temp)
+{
+    return (int16_t)(temp * 100);
+}
 
 static switch_func_pair_t button_func_pair[] = {
     {GPIO_INPUT_IO_TOGGLE_SWITCH, SWITCH_ONOFF_TOGGLE_CONTROL}};
@@ -65,7 +72,21 @@ static void esp_app_buttons_handler(switch_func_pair_t *button_func_pair)
 
 static void esp_app_temp_sensor_handler(float temperature)
 {
-    int16_t measured_value = 0;
+    // ESP_LOGI(CAN_TAG, "Attempting message read!");
+
+    // twai_message_t rx_msg;
+    // esp_err_t status = twai_receive(&rx_msg, 100);
+    // if (status == ESP_ERR_TIMEOUT)
+    // {
+    //     // ESP_LOGI(CAN_TAG, "No messages on queue, continuing!");
+    //     action = NONE;
+    // }
+    // if (status == ESP_OK)
+    // {
+    //     process_message(rx_msg);
+    // }
+    ESP_EARLY_LOGI(ZIGBEE_TAG, "Sending val: %d", action);
+    int16_t measured_value = zb_temperature_to_s16(action);
     /* Update temperature sensor measured value */
     esp_zb_lock_acquire(portMAX_DELAY);
     esp_zb_zcl_set_attribute_val(HA_ESP_SENSOR_ENDPOINT,
@@ -180,8 +201,8 @@ static void esp_zb_task(void *pvParameters)
     /* Create customized temperature sensor endpoint */
     esp_zb_temperature_sensor_cfg_t sensor_cfg = ESP_ZB_DEFAULT_TEMPERATURE_SENSOR_CONFIG();
     /* Set (Min|Max)MeasuredValure */
-    sensor_cfg.temp_meas_cfg.min_value = 0;
-    sensor_cfg.temp_meas_cfg.max_value = 4;
+    sensor_cfg.temp_meas_cfg.min_value = zb_temperature_to_s16(0);
+    sensor_cfg.temp_meas_cfg.max_value = zb_temperature_to_s16(4);
     esp_zb_ep_list_t *esp_zb_sensor_ep = custom_temperature_sensor_ep_create(HA_ESP_SENSOR_ENDPOINT, &sensor_cfg);
 
     /* Register the device */
@@ -227,12 +248,73 @@ static const twai_general_config_t g_config = {.mode = TWAI_MODE_NORMAL,
                                                .clkout_divider = 0};
 
 static SemaphoreHandle_t rx_sem;
+int previous_state = 0;
+int prev_time = 0;
+void process_message(twai_message_t rx_msg)
+{
+    switch (rx_msg.identifier)
+    {
+    case 0x2a0:
+        /* code */
+        switch (rx_msg.data[2])
+        {
+        case 0x00:
+            previous_state = 0;
+            break;
+        case 0x20:
+            if (previous_state == 1)
+            {
+                if (esp_timer_get_time() - prev_time > 2000000)
+                {
+                    // ESP_LOGI(CAN_TAG, "LONG UP");
+                    action = LONG_UP;
+                }
+                else
+                {
+
+                    // ESP_LOGI(CAN_TAG, "UP");
+                }
+            }
+            else
+            {
+                previous_state = 1;
+                prev_time = esp_timer_get_time();
+            }
+
+            break;
+        case 0x10:
+
+            if (previous_state == 2)
+            {
+                if (esp_timer_get_time() - prev_time > 2000000)
+                {
+                    // ESP_LOGI(CAN_TAG, "LONG DOWN");
+                    action = LONG_DOWN;
+                }
+
+                else
+                {
+                }
+                // ESP_LOGI(CAN_TAG, "DOWN");
+            }
+            else
+            {
+                prev_time = esp_timer_get_time();
+                previous_state = 2;
+            }
+            break;
+        default:
+            break;
+        }
+    default:
+        break;
+    }
+}
 
 static void twai_receive_task(void *arg)
 {
-    xSemaphoreTake(rx_sem, portMAX_DELAY);
-    int previous_state = 0;
-    int prev_time = 0;
+    // xSemaphoreTake(rx_sem, portMAX_DELAY);
+
     ESP_LOGI(CAN_TAG, "Ready to receive messages.");
     while (true)
     {
@@ -247,12 +329,16 @@ static void twai_receive_task(void *arg)
             {
             case 0x00:
                 previous_state = 0;
+                action = NONE;
                 break;
             case 0x20:
                 if (previous_state == 1)
                 {
                     if (esp_timer_get_time() - prev_time > 2000000)
+                    {
                         ESP_LOGI(CAN_TAG, "LONG UP");
+                        action = LONG_UP;
+                    }
                     else
                     {
 
@@ -271,7 +357,11 @@ static void twai_receive_task(void *arg)
                 if (previous_state == 2)
                 {
                     if (esp_timer_get_time() - prev_time > 2000000)
+                    {
                         ESP_LOGI(CAN_TAG, "LONG DOWN");
+                        action = LONG_DOWN;
+                    }
+
                     else
                         ESP_LOGI(CAN_TAG, "DOWN");
                 }
@@ -290,7 +380,7 @@ static void twai_receive_task(void *arg)
         }
     }
 
-    xSemaphoreGive(rx_sem);
+    // xSemaphoreGive(rx_sem);
     vTaskDelete(NULL);
 }
 
@@ -299,15 +389,15 @@ static void twai_receive_task(void *arg)
 void app_main(void)
 {
     rx_sem = xSemaphoreCreateBinary();
-    // xTaskCreatePinnedToCore(twai_receive_task, "TWAI_rx", 4096, NULL, RX_TASK_PRIO, NULL, tskNO_AFFINITY);
+    xTaskCreatePinnedToCore(twai_receive_task, "TWAI_rx", 4096, NULL, 1, NULL, tskNO_AFFINITY);
 
     // Install and start TWAI driver
     ESP_ERROR_CHECK(twai_driver_install(&g_config, &t_config, &f_config));
     ESP_LOGI(CAN_TAG, "Driver installed");
     ESP_ERROR_CHECK(twai_start());
     ESP_LOGI(CAN_TAG, "Driver started");
-
-    // xSemaphoreGive(rx_sem); // Start RX task
+    xTaskCreate(twai_receive_task, "TWAI_rx", 4096, NULL, 1, NULL);
+    //  xSemaphoreGive(rx_sem); // Start RX task
 
     // Start Zigbee drivers
     esp_zb_platform_config_t config = {
