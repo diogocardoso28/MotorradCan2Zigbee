@@ -31,7 +31,6 @@
 /*Zigbee Stuff*/
 #include "ha/esp_zigbee_ha_standard.h"
 #include "switch_driver.h"
-#include "temp_sensor_driver.h"
 /* --------------------- Definitions and static variables ------------------ */
 #define RX_TASK_PRIO 9
 
@@ -42,11 +41,7 @@ void process_message(twai_message_t rx_msg);
 
 /* --------------------- Zigbee Stuff --------------------- */
 int action = NONE;
-
-static int16_t zb_temperature_to_s16(float temp)
-{
-    return (int16_t)(temp * 100);
-}
+static void esp_app_temp_sensor_handler(short int *state);
 
 static switch_func_pair_t button_func_pair[] = {
     {GPIO_INPUT_IO_TOGGLE_SWITCH, SWITCH_ONOFF_TOGGLE_CONTROL}};
@@ -55,46 +50,26 @@ static void esp_app_buttons_handler(switch_func_pair_t *button_func_pair)
 {
     if (button_func_pair->func == SWITCH_ONOFF_TOGGLE_CONTROL)
     {
-        /* Send report attributes command */
-        esp_zb_zcl_report_attr_cmd_t report_attr_cmd;
-        report_attr_cmd.address_mode = ESP_ZB_APS_ADDR_MODE_DST_ADDR_ENDP_NOT_PRESENT;
-        report_attr_cmd.attributeID = ESP_ZB_ZCL_ATTR_TEMP_MEASUREMENT_VALUE_ID;
-        report_attr_cmd.cluster_role = ESP_ZB_ZCL_CLUSTER_SERVER_ROLE;
-        report_attr_cmd.clusterID = ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT;
-        report_attr_cmd.zcl_basic_cmd.src_endpoint = HA_ESP_SENSOR_ENDPOINT;
-
-        esp_zb_lock_acquire(portMAX_DELAY);
-        esp_zb_zcl_report_attr_cmd_req(&report_attr_cmd);
-        esp_zb_lock_release();
-        ESP_EARLY_LOGI(ZIGBEE_TAG, "Send 'report attributes' command");
+        ESP_EARLY_LOGI(ZIGBEE_TAG, "BRN PRESSED!");
+        esp_app_temp_sensor_handler(LONG_UP);
     }
 }
 
-static void esp_app_temp_sensor_handler(float temperature)
+static void esp_app_temp_sensor_handler(short int *state)
 {
-    int16_t measured_value = zb_temperature_to_s16(action);
+    ESP_EARLY_LOGI(ZIGBEE_TAG, "Sending value");
+
     /* Update temperature sensor measured value */
     esp_zb_lock_acquire(portMAX_DELAY);
-    esp_zb_zcl_set_attribute_val(HA_ESP_SENSOR_ENDPOINT,
-                                 ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
-                                 ESP_ZB_ZCL_ATTR_TEMP_MEASUREMENT_VALUE_ID, &measured_value, false);
+    esp_zb_zcl_set_attribute_val(HA_ESP_ENDPOINT_BUTTONS,
+                                 ESP_ZB_ZCL_CLUSTER_ID_MULTI_VALUE, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+                                 ESP_ZB_ZCL_ATTR_MULTI_VALUE_PRESENT_VALUE_ID, &state, false);
     esp_zb_lock_release();
 }
 
 static void bdb_start_top_level_commissioning_cb(uint8_t mode_mask)
 {
     ESP_RETURN_ON_FALSE(esp_zb_bdb_start_top_level_commissioning(mode_mask) == ESP_OK, , ZIGBEE_TAG, "Failed to start Zigbee bdb commissioning");
-}
-
-static esp_err_t deferred_driver_init(void)
-{
-    temperature_sensor_config_t temp_sensor_config =
-        TEMPERATURE_SENSOR_CONFIG_DEFAULT(ESP_TEMP_SENSOR_MIN_VALUE, ESP_TEMP_SENSOR_MAX_VALUE);
-    ESP_RETURN_ON_ERROR(temp_sensor_driver_init(&temp_sensor_config, ESP_TEMP_SENSOR_UPDATE_INTERVAL, esp_app_temp_sensor_handler), ZIGBEE_TAG,
-                        "Failed to initialize temperature sensor");
-    ESP_RETURN_ON_FALSE(switch_driver_init(button_func_pair, PAIR_SIZE(button_func_pair), esp_app_buttons_handler), ESP_FAIL, ZIGBEE_TAG,
-                        "Failed to initialize switch driver");
-    return ESP_OK;
 }
 
 void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
@@ -112,7 +87,8 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
     case ESP_ZB_BDB_SIGNAL_DEVICE_REBOOT:
         if (err_status == ESP_OK)
         {
-            ESP_LOGI(ZIGBEE_TAG, "Deferred driver initialization %s", deferred_driver_init() ? "failed" : "successful");
+            // ESP_LOGI(ZIGBEE_TAG, "Deferred driver initialization %s", deferred_driver_init() ? "failed" : "successful");´
+            switch_driver_init(button_func_pair, PAIR_SIZE(button_func_pair), esp_app_buttons_handler);
             ESP_LOGI(ZIGBEE_TAG, "Device started up in %s factory-reset mode", esp_zb_bdb_is_factory_new() ? "" : "non");
             if (esp_zb_bdb_is_factory_new())
             {
@@ -178,18 +154,64 @@ static esp_zb_ep_list_t *custom_temperature_sensor_ep_create(uint8_t endpoint_id
     return ep_list;
 }
 
+static esp_zb_cluster_list_t *custom_actions_clusters_create(esp_zb_multistate_value_cluster_cfg_t *actions)
+{
+
+    esp_zb_cluster_list_t *cluster_list = esp_zb_zcl_cluster_list_create();
+    esp_zb_basic_cluster_cfg_t basic_cfg =
+        {
+            .zcl_version = ESP_ZB_ZCL_BASIC_ZCL_VERSION_DEFAULT_VALUE,
+            .power_source = ESP_ZB_ZCL_BASIC_POWER_SOURCE_DEFAULT_VALUE,
+        };
+    esp_zb_attribute_list_t *basic_cluster = esp_zb_basic_cluster_create(&basic_cfg);
+
+    esp_zb_identify_cluster_cfg_t identify_cfg = {
+        .identify_time = ESP_ZB_ZCL_IDENTIFY_IDENTIFY_TIME_DEFAULT_VALUE,
+    };
+
+    ESP_ERROR_CHECK(esp_zb_basic_cluster_add_attr(basic_cluster, ESP_ZB_ZCL_ATTR_BASIC_MANUFACTURER_NAME_ID, MANUFACTURER_NAME));
+    ESP_ERROR_CHECK(esp_zb_basic_cluster_add_attr(basic_cluster, ESP_ZB_ZCL_ATTR_BASIC_MODEL_IDENTIFIER_ID, MODEL_IDENTIFIER));
+    ESP_ERROR_CHECK(esp_zb_cluster_list_add_basic_cluster(cluster_list, basic_cluster, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
+    ESP_ERROR_CHECK(esp_zb_cluster_list_add_identify_cluster(cluster_list, esp_zb_identify_cluster_create(&identify_cfg), ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
+    ESP_ERROR_CHECK(esp_zb_cluster_list_add_identify_cluster(cluster_list, esp_zb_zcl_attr_list_create(ESP_ZB_ZCL_CLUSTER_ID_IDENTIFY), ESP_ZB_ZCL_CLUSTER_CLIENT_ROLE));
+    ESP_ERROR_CHECK(esp_zb_cluster_list_add_multistate_value_cluster(cluster_list, esp_zb_multistate_value_cluster_create(&actions), ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
+
+    return cluster_list;
+}
+
+static esp_zb_ep_list_t *custom_actions_ep_create(uint8_t endpoint_id, esp_zb_multistate_value_cluster_cfg_t *actions)
+{
+    esp_zb_ep_list_t *ep_list = esp_zb_ep_list_create();
+    esp_zb_endpoint_config_t endpoint_config = {
+        .endpoint = endpoint_id,
+        .app_profile_id = ESP_ZB_AF_HA_PROFILE_ID,
+        .app_device_id = ESP_ZB_HA_TEMPERATURE_SENSOR_DEVICE_ID, // TODO: Change this to button
+        .app_device_version = 0};
+    esp_zb_ep_list_add_ep(ep_list, custom_actions_clusters_create(actions), endpoint_config);
+    return ep_list;
+}
+
 static void esp_zb_task(void *pvParameters)
 {
     /* Initialize Zigbee stack */
     esp_zb_cfg_t zb_nwk_cfg = ESP_ZB_ZED_CONFIG();
     esp_zb_init(&zb_nwk_cfg);
     esp_zb_secur_network_min_join_lqi_set(0);
-    /* Create customized temperature sensor endpoint */
-    esp_zb_temperature_sensor_cfg_t sensor_cfg = ESP_ZB_DEFAULT_TEMPERATURE_SENSOR_CONFIG();
-    /* Set (Min|Max)MeasuredValure */
-    sensor_cfg.temp_meas_cfg.min_value = zb_temperature_to_s16(0);
-    sensor_cfg.temp_meas_cfg.max_value = zb_temperature_to_s16(4);
-    esp_zb_ep_list_t *esp_zb_sensor_ep = custom_temperature_sensor_ep_create(HA_ESP_SENSOR_ENDPOINT, &sensor_cfg);
+    // /* Create customized temperature sensor endpoint */
+    //  esp_zb_temperature_sensor_cfg_t sensor_cfg = ESP_ZB_DEFAULT_TEMPERATURE_SENSOR_CONFIG();
+    // /* Set (Min|Max)MeasuredValure */
+    // sensor_cfg.temp_meas_cfg.min_value = zb_temperature_to_s16(0);
+    // sensor_cfg.temp_meas_cfg.max_value = zb_temperature_to_s16(4);
+    // esp_zb_ep_list_t *esp_zb_sensor_ep = custom_temperature_sensor_ep_create(HA_ESP_ENDPOINT_BUTTONS, &sensor_cfg);
+
+    esp_zb_multistate_value_cluster_cfg_t actions_cfg = {
+        .number_of_states = 4,
+        .out_of_service = false,
+        .present_value = 0,
+        .status_flags = ESP_ZB_ZCL_STATUS_SUCCESS,
+    };
+
+    esp_zb_ep_list_t *esp_zb_sensor_ep = custom_actions_ep_create(HA_ESP_ENDPOINT_BUTTONS, &actions_cfg);
 
     /* Register the device */
     esp_zb_device_register(esp_zb_sensor_ep);
@@ -197,8 +219,8 @@ static void esp_zb_task(void *pvParameters)
     /* Config the reporting info  */
     esp_zb_zcl_reporting_info_t reporting_info = {
         .direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV,
-        .ep = HA_ESP_SENSOR_ENDPOINT,
-        .cluster_id = ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT,
+        .ep = HA_ESP_ENDPOINT_BUTTONS,
+        .cluster_id = ESP_ZB_ZCL_CLUSTER_ID_MULTI_VALUE, // Chanigng this kills it
         .cluster_role = ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
         .dst.profile_id = ESP_ZB_AF_HA_PROFILE_ID,
         .u.send_info.min_interval = 1,
@@ -206,11 +228,12 @@ static void esp_zb_task(void *pvParameters)
         .u.send_info.def_min_interval = 1,
         .u.send_info.def_max_interval = 0,
         .u.send_info.delta.u16 = 100,
-        .attr_id = ESP_ZB_ZCL_ATTR_TEMP_MEASUREMENT_VALUE_ID,
+        .attr_id = ESP_ZB_ZCL_ATTR_MULTI_VALUE_PRESENT_VALUE_ID, // This does work
         .manuf_code = ESP_ZB_ZCL_ATTR_NON_MANUFACTURER_SPECIFIC,
     };
 
     esp_zb_zcl_update_reporting_info(&reporting_info);
+    ESP_EARLY_LOGI(ZIGBEE_TAG, "Configured Reporting info");
 
     esp_zb_set_primary_network_channel_set(ESP_ZB_PRIMARY_CHANNEL_MASK);
     ESP_ERROR_CHECK(esp_zb_start(false));
@@ -237,7 +260,6 @@ static void twai_receive_task(void *arg)
 {
     int previous_state = 0;
     int prev_time = 0;
-
     ESP_LOGI(CAN_TAG, "Ready to receive messages.");
     while (true)
     {
@@ -331,11 +353,11 @@ void app_main(void)
     xTaskCreate(esp_zb_task, "Zigbee_main", 4096, NULL, 5, NULL);
 
     ESP_LOGI(MAIN_TAG, "Device ready!");
+    for (;;)
+    {
+        esp_app_temp_sensor_handler(NONE);
+        vTaskDelay(pdMS_TO_TICKS(10 * 1000));
+    }
 
     vTaskDelay(pdMS_TO_TICKS(100));
-    // Stop and uninstall TWAI driver
-    ESP_ERROR_CHECK(twai_stop());
-    ESP_LOGI(CAN_TAG, "Driver stopped");
-    ESP_ERROR_CHECK(twai_driver_uninstall());
-    ESP_LOGI(CAN_TAG, "Driver uninstalled");
 }

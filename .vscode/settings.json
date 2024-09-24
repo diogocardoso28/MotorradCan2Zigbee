@@ -21,6 +21,7 @@
         "zb_config_platform.h": "c",
         "zboss_api.h": "c",
         "switch_driver.h": "c",
-        "temp_sensor_driver.h": "c"
+        "temp_sensor_driver.h": "c",
+        "esp_err.h": "c"
     }
 }
