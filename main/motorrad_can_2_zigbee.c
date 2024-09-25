@@ -46,12 +46,28 @@ static void esp_app_temp_sensor_handler(short int *state);
 static switch_func_pair_t button_func_pair[] = {
     {GPIO_INPUT_IO_TOGGLE_SWITCH, SWITCH_ONOFF_TOGGLE_CONTROL}};
 
+static void report_button_action()
+{
+    esp_zb_zcl_report_attr_cmd_t report_attr_cmd;
+    report_attr_cmd.address_mode = ESP_ZB_APS_ADDR_MODE_DST_ADDR_ENDP_NOT_PRESENT;
+    report_attr_cmd.attributeID = ESP_ZB_ZCL_ATTR_MULTI_VALUE_PRESENT_VALUE_ID;
+    report_attr_cmd.cluster_role = ESP_ZB_ZCL_CLUSTER_SERVER_ROLE;
+    report_attr_cmd.clusterID = ESP_ZB_ZCL_CLUSTER_ID_MULTI_VALUE;
+    report_attr_cmd.zcl_basic_cmd.src_endpoint = HA_ESP_ENDPOINT_BUTTONS;
+
+    esp_zb_lock_acquire(portMAX_DELAY);
+    esp_zb_zcl_report_attr_cmd_req(&report_attr_cmd);
+    esp_zb_lock_release();
+    ESP_EARLY_LOGI(ZIGBEE_TAG, "Send 'report attributes' command");
+}
+
 static void esp_app_buttons_handler(switch_func_pair_t *button_func_pair)
 {
     if (button_func_pair->func == SWITCH_ONOFF_TOGGLE_CONTROL)
     {
         ESP_EARLY_LOGI(ZIGBEE_TAG, "BRN PRESSED!");
         esp_app_temp_sensor_handler(LONG_UP);
+        /* Send report attributes command */
     }
 }
 
@@ -59,12 +75,13 @@ static void esp_app_temp_sensor_handler(short int *state)
 {
     ESP_EARLY_LOGI(ZIGBEE_TAG, "Sending value");
 
-    /* Update temperature sensor measured value */
     esp_zb_lock_acquire(portMAX_DELAY);
     esp_zb_zcl_set_attribute_val(HA_ESP_ENDPOINT_BUTTONS,
                                  ESP_ZB_ZCL_CLUSTER_ID_MULTI_VALUE, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
                                  ESP_ZB_ZCL_ATTR_MULTI_VALUE_PRESENT_VALUE_ID, &state, false);
     esp_zb_lock_release();
+    // Report Change
+    report_button_action();
 }
 
 static void bdb_start_top_level_commissioning_cb(uint8_t mode_mask)
@@ -129,31 +146,6 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
     }
 }
 
-static esp_zb_cluster_list_t *custom_temperature_sensor_clusters_create(esp_zb_temperature_sensor_cfg_t *temperature_sensor)
-{
-    esp_zb_cluster_list_t *cluster_list = esp_zb_zcl_cluster_list_create();
-    esp_zb_attribute_list_t *basic_cluster = esp_zb_basic_cluster_create(&(temperature_sensor->basic_cfg));
-    ESP_ERROR_CHECK(esp_zb_basic_cluster_add_attr(basic_cluster, ESP_ZB_ZCL_ATTR_BASIC_MANUFACTURER_NAME_ID, MANUFACTURER_NAME));
-    ESP_ERROR_CHECK(esp_zb_basic_cluster_add_attr(basic_cluster, ESP_ZB_ZCL_ATTR_BASIC_MODEL_IDENTIFIER_ID, MODEL_IDENTIFIER));
-    ESP_ERROR_CHECK(esp_zb_cluster_list_add_basic_cluster(cluster_list, basic_cluster, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
-    ESP_ERROR_CHECK(esp_zb_cluster_list_add_identify_cluster(cluster_list, esp_zb_identify_cluster_create(&(temperature_sensor->identify_cfg)), ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
-    ESP_ERROR_CHECK(esp_zb_cluster_list_add_identify_cluster(cluster_list, esp_zb_zcl_attr_list_create(ESP_ZB_ZCL_CLUSTER_ID_IDENTIFY), ESP_ZB_ZCL_CLUSTER_CLIENT_ROLE));
-    ESP_ERROR_CHECK(esp_zb_cluster_list_add_temperature_meas_cluster(cluster_list, esp_zb_temperature_meas_cluster_create(&(temperature_sensor->temp_meas_cfg)), ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
-    return cluster_list;
-}
-
-static esp_zb_ep_list_t *custom_temperature_sensor_ep_create(uint8_t endpoint_id, esp_zb_temperature_sensor_cfg_t *temperature_sensor)
-{
-    esp_zb_ep_list_t *ep_list = esp_zb_ep_list_create();
-    esp_zb_endpoint_config_t endpoint_config = {
-        .endpoint = endpoint_id,
-        .app_profile_id = ESP_ZB_AF_HA_PROFILE_ID,
-        .app_device_id = ESP_ZB_HA_TEMPERATURE_SENSOR_DEVICE_ID,
-        .app_device_version = 0};
-    esp_zb_ep_list_add_ep(ep_list, custom_temperature_sensor_clusters_create(temperature_sensor), endpoint_config);
-    return ep_list;
-}
-
 static esp_zb_cluster_list_t *custom_actions_clusters_create(esp_zb_multistate_value_cluster_cfg_t *actions)
 {
 
@@ -175,7 +167,20 @@ static esp_zb_cluster_list_t *custom_actions_clusters_create(esp_zb_multistate_v
     ESP_ERROR_CHECK(esp_zb_cluster_list_add_identify_cluster(cluster_list, esp_zb_identify_cluster_create(&identify_cfg), ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
     ESP_ERROR_CHECK(esp_zb_cluster_list_add_identify_cluster(cluster_list, esp_zb_zcl_attr_list_create(ESP_ZB_ZCL_CLUSTER_ID_IDENTIFY), ESP_ZB_ZCL_CLUSTER_CLIENT_ROLE));
     ESP_ERROR_CHECK(esp_zb_cluster_list_add_multistate_value_cluster(cluster_list, esp_zb_multistate_value_cluster_create(&actions), ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
+    // Enable reporting on this cluser
+    esp_zb_attribute_list_t *multi_value_cluster =
+        esp_zb_cluster_list_get_cluster(cluster_list, ESP_ZB_ZCL_CLUSTER_ID_MULTI_VALUE, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
+    esp_zb_attribute_list_t *attr = multi_value_cluster;
 
+    while (attr)
+    {
+        if (attr->attribute.id == ESP_ZB_ZCL_ATTR_MULTI_VALUE_PRESENT_VALUE_ID)
+        {
+            attr->attribute.access = multi_value_cluster->attribute.access | ESP_ZB_ZCL_ATTR_ACCESS_REPORTING;
+            break;
+        }
+        attr = attr->next;
+    }
     return cluster_list;
 }
 
@@ -304,7 +309,7 @@ static void twai_receive_task(void *arg)
                     if (esp_timer_get_time() - prev_time > 2000000)
                     {
                         ESP_LOGI(CAN_TAG, "LONG DOWN");
-                        action = LONG_DOWN;
+                        esp_app_temp_sensor_handler(LONG_DOWN); // Report to HA
                     }
 
                     else
