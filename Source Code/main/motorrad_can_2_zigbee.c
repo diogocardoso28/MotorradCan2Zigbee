@@ -287,12 +287,12 @@ static void twai_receive_task(void *arg)
                     if (esp_timer_get_time() - prev_time > 2000000)
                     {
                         ESP_LOGI(CAN_TAG, "LONG UP");
-                        action = LONG_UP;
+                        esp_app_temp_sensor_handler(LONG_UP); // Report to HA
                     }
                     else
                     {
-
                         ESP_LOGI(CAN_TAG, "UP");
+                        esp_app_temp_sensor_handler(UP); // Report to HA
                     }
                 }
                 else
@@ -313,7 +313,10 @@ static void twai_receive_task(void *arg)
                     }
 
                     else
+                    {
                         ESP_LOGI(CAN_TAG, "DOWN");
+                        esp_app_temp_sensor_handler(DOWN); // Report to HA
+                    }
                 }
                 else
                 {
