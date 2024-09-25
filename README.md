@@ -3,5 +3,5 @@
 # Roadmap
 
 - [X] Decode canbus messages and get button presses
-- [ ] Implement zigbee connectivity
+- [X] Implement zigbee connectivity
 - [ ] Use as bluetooth keybord to control phone volume
