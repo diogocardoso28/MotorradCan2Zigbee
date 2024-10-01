@@ -60,3 +60,5 @@ enum ButtonActions
     LONG_DOWN,
     NONE,
 };
+
+static void esp_app_temp_sensor_handler(short int state);

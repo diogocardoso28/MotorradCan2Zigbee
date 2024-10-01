@@ -27,10 +27,12 @@
 #include "esp_timer.h"
 #include "nvs_flash.h"
 #include "esp_check.h"
+#include "notification_led.h"
 
 /*Zigbee Stuff*/
 #include "ha/esp_zigbee_ha_standard.h"
 #include "switch_driver.h"
+
 /* --------------------- Definitions and static variables ------------------ */
 #define RX_TASK_PRIO 9
 
@@ -38,16 +40,15 @@
 #define CAN_TAG "CAN"
 #define ZIGBEE_TAG "ZIGBEE"
 void process_message(twai_message_t rx_msg);
-
 /* --------------------- Zigbee Stuff --------------------- */
-int action = NONE;
-static void esp_app_temp_sensor_handler(short int *state);
+int prev_action = NONE;
 
 static switch_func_pair_t button_func_pair[] = {
     {GPIO_INPUT_IO_TOGGLE_SWITCH, SWITCH_ONOFF_TOGGLE_CONTROL}};
 
 static void report_button_action()
 {
+    /* Send report attributes command */
     esp_zb_zcl_report_attr_cmd_t report_attr_cmd;
     report_attr_cmd.address_mode = ESP_ZB_APS_ADDR_MODE_DST_ADDR_ENDP_NOT_PRESENT;
     report_attr_cmd.attributeID = ESP_ZB_ZCL_ATTR_MULTI_VALUE_PRESENT_VALUE_ID;
@@ -67,11 +68,10 @@ static void esp_app_buttons_handler(switch_func_pair_t *button_func_pair)
     {
         ESP_EARLY_LOGI(ZIGBEE_TAG, "BRN PRESSED!");
         esp_app_temp_sensor_handler(LONG_UP);
-        /* Send report attributes command */
     }
 }
 
-static void esp_app_temp_sensor_handler(short int *state)
+static void esp_app_temp_sensor_handler(short int state)
 {
     ESP_EARLY_LOGI(ZIGBEE_TAG, "Sending value");
 
@@ -80,8 +80,12 @@ static void esp_app_temp_sensor_handler(short int *state)
                                  ESP_ZB_ZCL_CLUSTER_ID_MULTI_VALUE, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
                                  ESP_ZB_ZCL_ATTR_MULTI_VALUE_PRESENT_VALUE_ID, &state, false);
     esp_zb_lock_release();
-    // Report Change
-    report_button_action();
+    if (&state != prev_action)
+    {
+        // Report Change
+        report_button_action();
+        prev_action = &state;
+    }
 }
 
 static void bdb_start_top_level_commissioning_cb(uint8_t mode_mask)
@@ -115,12 +119,14 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
             else
             {
                 ESP_LOGI(ZIGBEE_TAG, "Device rebooted");
+                led_ok();
             }
         }
         else
         {
             /* commissioning failed */
             ESP_LOGW(ZIGBEE_TAG, "Failed to initialize Zigbee stack (status: %s)", esp_err_to_name(err_status));
+            led_zigbee_error();
         }
         break;
     case ESP_ZB_BDB_SIGNAL_STEERING:
@@ -132,6 +138,7 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
                      extended_pan_id[7], extended_pan_id[6], extended_pan_id[5], extended_pan_id[4],
                      extended_pan_id[3], extended_pan_id[2], extended_pan_id[1], extended_pan_id[0],
                      esp_zb_get_pan_id(), esp_zb_get_current_channel(), esp_zb_get_short_address());
+            led_ok();
         }
         else
         {
@@ -167,7 +174,7 @@ static esp_zb_cluster_list_t *custom_actions_clusters_create(esp_zb_multistate_v
     ESP_ERROR_CHECK(esp_zb_cluster_list_add_identify_cluster(cluster_list, esp_zb_identify_cluster_create(&identify_cfg), ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
     ESP_ERROR_CHECK(esp_zb_cluster_list_add_identify_cluster(cluster_list, esp_zb_zcl_attr_list_create(ESP_ZB_ZCL_CLUSTER_ID_IDENTIFY), ESP_ZB_ZCL_CLUSTER_CLIENT_ROLE));
     ESP_ERROR_CHECK(esp_zb_cluster_list_add_multistate_value_cluster(cluster_list, esp_zb_multistate_value_cluster_create(&actions), ESP_ZB_ZCL_CLUSTER_SERVER_ROLE));
-    // Enable reporting on this cluser
+    // Enable reporting on current value cluster
     esp_zb_attribute_list_t *multi_value_cluster =
         esp_zb_cluster_list_get_cluster(cluster_list, ESP_ZB_ZCL_CLUSTER_ID_MULTI_VALUE, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
     esp_zb_attribute_list_t *attr = multi_value_cluster;
@@ -190,7 +197,7 @@ static esp_zb_ep_list_t *custom_actions_ep_create(uint8_t endpoint_id, esp_zb_mu
     esp_zb_endpoint_config_t endpoint_config = {
         .endpoint = endpoint_id,
         .app_profile_id = ESP_ZB_AF_HA_PROFILE_ID,
-        .app_device_id = ESP_ZB_HA_TEMPERATURE_SENSOR_DEVICE_ID, // TODO: Change this to button
+        .app_device_id = ESP_ZB_HA_CUSTOM_ATTR_DEVICE_ID,
         .app_device_version = 0};
     esp_zb_ep_list_add_ep(ep_list, custom_actions_clusters_create(actions), endpoint_config);
     return ep_list;
@@ -198,17 +205,11 @@ static esp_zb_ep_list_t *custom_actions_ep_create(uint8_t endpoint_id, esp_zb_mu
 
 static void esp_zb_task(void *pvParameters)
 {
+    led_zigbee_connecting();
     /* Initialize Zigbee stack */
     esp_zb_cfg_t zb_nwk_cfg = ESP_ZB_ZED_CONFIG();
     esp_zb_init(&zb_nwk_cfg);
     esp_zb_secur_network_min_join_lqi_set(0);
-    // /* Create customized temperature sensor endpoint */
-    //  esp_zb_temperature_sensor_cfg_t sensor_cfg = ESP_ZB_DEFAULT_TEMPERATURE_SENSOR_CONFIG();
-    // /* Set (Min|Max)MeasuredValure */
-    // sensor_cfg.temp_meas_cfg.min_value = zb_temperature_to_s16(0);
-    // sensor_cfg.temp_meas_cfg.max_value = zb_temperature_to_s16(4);
-    // esp_zb_ep_list_t *esp_zb_sensor_ep = custom_temperature_sensor_ep_create(HA_ESP_ENDPOINT_BUTTONS, &sensor_cfg);
-
     esp_zb_multistate_value_cluster_cfg_t actions_cfg = {
         .number_of_states = 4,
         .out_of_service = false,
@@ -279,7 +280,7 @@ static void twai_receive_task(void *arg)
             {
             case 0x00:
                 previous_state = 0;
-                action = NONE;
+                esp_app_temp_sensor_handler(NONE); // Report to HA
                 break;
             case 0x20:
                 if (previous_state == 1)
@@ -303,7 +304,6 @@ static void twai_receive_task(void *arg)
 
                 break;
             case 0x10:
-
                 if (previous_state == 2)
                 {
                     if (esp_timer_get_time() - prev_time > 2000000)
@@ -340,14 +340,15 @@ static void twai_receive_task(void *arg)
 
 void app_main(void)
 {
-    xTaskCreatePinnedToCore(twai_receive_task, "TWAI_rx", 4096, NULL, 1, NULL, tskNO_AFFINITY);
+    configure_led();
+    vTaskDelay(pdMS_TO_TICKS(1000));
 
     // Install and start TWAI driver
     ESP_ERROR_CHECK(twai_driver_install(&g_config, &t_config, &f_config));
     ESP_LOGI(CAN_TAG, "Driver installed");
     ESP_ERROR_CHECK(twai_start());
     ESP_LOGI(CAN_TAG, "Driver started");
-    xTaskCreate(twai_receive_task, "TWAI_rx", 4096, NULL, 1, NULL); // Start RX task
+    xTaskCreate(twai_receive_task, "TWAI_rx", 4096, NULL, 1, NULL); // Start CAN RX task
 
     // Start Zigbee drivers
     esp_zb_platform_config_t config = {
@@ -357,15 +358,8 @@ void app_main(void)
     ESP_ERROR_CHECK(nvs_flash_init());
     ESP_ERROR_CHECK(esp_zb_platform_config(&config));
 
-    /* Start Zigbee stack task */
-    xTaskCreate(esp_zb_task, "Zigbee_main", 4096, NULL, 5, NULL);
+    xTaskCreate(esp_zb_task, "Zigbee_main", 4096, NULL, 5, NULL); // Start Zigbee stack task
 
     ESP_LOGI(MAIN_TAG, "Device ready!");
-    for (;;)
-    {
-        esp_app_temp_sensor_handler(NONE);
-        vTaskDelay(pdMS_TO_TICKS(10 * 1000));
-    }
-
     vTaskDelay(pdMS_TO_TICKS(100));
 }
