@@ -34,11 +34,10 @@
 #include "switch_driver.h"
 
 /* --------------------- Definitions and static variables ------------------ */
-#define RX_TASK_PRIO 9
-
 #define MAIN_TAG "MotorradCan2Zigbee"
 #define CAN_TAG "CAN"
 #define ZIGBEE_TAG "ZIGBEE"
+#define LONG_PRESS_TIME_SECONDS 2
 void process_message(twai_message_t rx_msg);
 /* --------------------- Zigbee Stuff --------------------- */
 int prev_action = NONE;
@@ -60,6 +59,7 @@ static void report_button_action()
     esp_zb_zcl_report_attr_cmd_req(&report_attr_cmd);
     esp_zb_lock_release();
     ESP_EARLY_LOGI(ZIGBEE_TAG, "Send 'report attributes' command");
+    led_zigbee_data_sent();
 }
 
 static void esp_app_buttons_handler(switch_func_pair_t *button_func_pair)
@@ -80,11 +80,11 @@ static void esp_app_temp_sensor_handler(short int state)
                                  ESP_ZB_ZCL_CLUSTER_ID_MULTI_VALUE, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
                                  ESP_ZB_ZCL_ATTR_MULTI_VALUE_PRESENT_VALUE_ID, &state, false);
     esp_zb_lock_release();
-    if (&state != prev_action)
+    if (state != prev_action)
     {
         // Report Change
         report_button_action();
-        prev_action = &state;
+        prev_action = state;
     }
 }
 
@@ -271,6 +271,7 @@ static void twai_receive_task(void *arg)
     {
         twai_message_t rx_msg;
         twai_receive(&rx_msg, portMAX_DELAY);
+        led_can_data_rx();
         // TODO: Make this more readable
         switch (rx_msg.identifier)
         {
@@ -280,12 +281,13 @@ static void twai_receive_task(void *arg)
             {
             case 0x00:
                 previous_state = 0;
-                esp_app_temp_sensor_handler(NONE); // Report to HA
+                prev_action = NONE;
+                // esp_app_temp_sensor_handler(NONE); // Report to HA
                 break;
             case 0x20:
                 if (previous_state == 1)
                 {
-                    if (esp_timer_get_time() - prev_time > 2000000)
+                    if (esp_timer_get_time() - prev_time > LONG_PRESS_TIME_SECONDS * 1000000)
                     {
                         ESP_LOGI(CAN_TAG, "LONG UP");
                         esp_app_temp_sensor_handler(LONG_UP); // Report to HA
@@ -306,7 +308,7 @@ static void twai_receive_task(void *arg)
             case 0x10:
                 if (previous_state == 2)
                 {
-                    if (esp_timer_get_time() - prev_time > 2000000)
+                    if (esp_timer_get_time() - prev_time > LONG_PRESS_TIME_SECONDS * 1000000)
                     {
                         ESP_LOGI(CAN_TAG, "LONG DOWN");
                         esp_app_temp_sensor_handler(LONG_DOWN); // Report to HA
