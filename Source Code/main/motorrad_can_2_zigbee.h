@@ -52,13 +52,4 @@
         .host_connection_mode = ZB_HOST_CONNECTION_MODE_NONE, \
     }
 
-enum ButtonActions
-{
-    UP,
-    LONG_UP,
-    DOWN,
-    LONG_DOWN,
-    NONE,
-};
-
 static void esp_app_temp_sensor_handler(short int state);

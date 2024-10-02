@@ -27,6 +27,8 @@
         "esp_zigbee_ha_standard.h": "c",
         "freertos.h": "c",
         "queue.h": "c",
-        "esp_zigbee_trace.h": "c"
+        "esp_zigbee_trace.h": "c",
+        "motorrad_can_2_zigbee.h": "c",
+        "twai.h": "c"
     }
 }
