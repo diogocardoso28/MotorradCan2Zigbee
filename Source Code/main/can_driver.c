@@ -32,7 +32,11 @@ static void twai_receive_task(void *arg)
             switch (rx_msg.data[2]) // D2 Byte
             {
             case 0x00:
-                previous_state = NONE;
+                if (previous_state != NONE)
+                {
+                    handle_menu_buttons(NONE); // Report to HA
+                    previous_state = NONE;
+                }
                 break;
             case 0x20: // Menu Up Button
                 if (previous_state == UP || previous_state == LONG_UP)
