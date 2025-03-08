@@ -121,6 +121,7 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
             /* commissioning failed */
             ESP_LOGW(ZIGBEE_TAG, "Failed to initialize Zigbee stack (status: %s)", esp_err_to_name(err_status));
             led_zigbee_error();
+            esp_restart();
         }
         break;
     case ESP_ZB_BDB_SIGNAL_STEERING:
